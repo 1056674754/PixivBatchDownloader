@@ -273,6 +273,9 @@ interface XzSetting {
   /**设置下载一个文件后，需要等待多久才能开始下一次下载。值为 0 - 3600 秒，允许小数 */
   downloadInterval: number
   downloadIntervalOnWorksNumber: number
+  serverURL: string
+  skipDownloaded: boolean
+  useServerDownload: boolean
 }
 // chrome storage 里不能使用 Map，因为保存时，Map 会被转换为 Object {}
 
@@ -502,6 +505,9 @@ class Settings {
     slowCrawlDealy: 1600,
     downloadInterval: 0,
     downloadIntervalOnWorksNumber: 120,
+    serverURL: 'http://localhost:3000',
+    skipDownloaded: true,
+    useServerDownload: true,
   }
 
   private allSettingKeys = Object.keys(this.defaultSettings)

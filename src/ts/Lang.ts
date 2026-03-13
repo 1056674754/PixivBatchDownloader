@@ -183,3 +183,20 @@ class Lang {
 const lang = new Lang()
 
 export { lang }
+
+// 在翻译对象中添加新的翻译项类型
+declare module './Lang' {
+  interface LangPackage {
+    '_服务器设置': Record<string, string>;
+    '_使用服务器下载': Record<string, string>;
+    '_服务器URL': Record<string, string>;
+    '_跳过已下载的作品': Record<string, string>;
+    '_服务器下载失败': Record<string, string>;
+    '_下载进度': Record<string, string>;
+    '_下载完成': Record<string, string>;
+    '_获取任务状态失败': Record<string, string>;
+    '_已取消服务器下载任务': Record<string, string>;
+    '_取消服务器任务失败': Record<string, string>;
+    '_所有作品已下载，无需重复下载': Record<string, string>;
+  }
+}

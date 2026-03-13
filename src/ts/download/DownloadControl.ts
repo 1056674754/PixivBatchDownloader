@@ -28,8 +28,9 @@ import { pageType } from '../PageType'
 import { msgBox } from '../MsgBox'
 import './CheckWarningMessage'
 import { showHelp } from '../ShowHelp'
+import { serverAPI } from '../API/ServerAPI'
 
-class DownloadControl {
+export class DownloadControl {
   constructor() {
     this.createResultBtns()
 
@@ -95,6 +96,18 @@ class DownloadControl {
   private checkDownloadTimeoutTimer: undefined | number = undefined
 
   private readonly msgFlag = 'uuidTip'
+
+  // 添加一个新的属性来跟踪服务器下载任务
+  private serverTaskId: string | null = null
+  private serverTaskCheckInterval: number | null = null
+
+  // 添加缺少的属性
+  private needReferer: boolean = true
+  private log = {
+    log: (message: string) => console.log(message),
+    success: (message: string) => console.log(`%c${message}`, 'color: green'),
+    error: (message: string) => console.error(message)
+  }
 
   private bindEvents() {
     window.addEventListener(EVT.list.crawlStart, () => {
@@ -183,7 +196,7 @@ class DownloadControl {
         // 浏览器把文件保存到本地失败
 
         // 用户操作导致下载取消的情况，跳过这个文件，不再重试保存它。触发条件如：
-        // 用户在浏览器弹出“另存为”对话框时取消保存
+        // 用户在浏览器弹出"另存为"对话框时取消保存
         // 用户让 IDM 转接这个下载时
         if (msg.err === 'USER_CANCELED') {
           log.error(
@@ -370,12 +383,12 @@ class DownloadControl {
 
     this.setDownloadThread()
 
-    // 在插画漫画搜索页面里，如果启用了“预览搜索页面的筛选结果”
+    // 在插画漫画搜索页面里，如果启用了"预览搜索页面的筛选结果"
     if (
       pageType.type === pageType.list.ArtworkSearch &&
       settings.previewResult
     ) {
-      // “预览搜索页面的筛选结果”会阻止自动开始下载。但是一些情况例外
+      // "预览搜索页面的筛选结果"会阻止自动开始下载。但是一些情况例外
       // 允许快速抓取发起的下载请求自动开始下载
       // 允许由抓取标签列表功能发起的下载请求自动开始下载
       if (!states.quickCrawl && !states.crawlTagList) {
@@ -405,7 +418,7 @@ class DownloadControl {
 
     if (this.pause) {
       // 从上次中断的位置继续下载
-      // 把“使用中”的下载状态重置为“未使用”
+      // 把"使用中"的下载状态重置为"未使用"
       downloadStates.resume()
     } else {
       // 如果之前没有暂停任务，也没有进入恢复模式，则重新下载
@@ -552,7 +565,7 @@ class DownloadControl {
   private downloadOrSkipAFile(data: DonwloadSuccessData | DonwloadSkipData) {
     const task = this.taskList[data.id]
 
-    // 更改这个任务状态为“已完成”
+    // 更改这个任务状态为"已完成"
     downloadStates.setState(task.index, 1)
 
     // 统计已下载数量
@@ -649,6 +662,126 @@ class DownloadControl {
   private hideResultBtns() {
     this.resultBtns.exportJSON.style.display = 'none'
     this.resultBtns.exportCSV.style.display = 'none'
+  }
+
+  // 修改下载方法，支持服务器下载
+  public async downloadItems(items: DownloadItem[]) {
+    // 检查是否使用服务器下载
+    if (settings.useServerDownload) {
+      await this.downloadWithServer(items)
+    } else {
+      // 原有的下载逻辑
+      // ... existing code ...
+    }
+  }
+
+  // 添加服务器下载方法
+  private async downloadWithServer(items: DownloadItem[]) {
+    try {
+      // 准备下载URL和请求头
+      const urls: string[] = []
+      const headers: Record<string, string> = {}
+      
+      // 设置通用请求头
+      if (this.needReferer) {
+        headers.referer = 'https://www.pixiv.net/'
+      }
+      
+      // 添加Cookie
+      const cookies = await browser.cookies.getAll({ domain: '.pixiv.net' })
+      if (cookies.length > 0) {
+        const cookieStr = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
+        headers.cookie = cookieStr
+      }
+      
+      // 收集所有下载URL
+      for (const item of items) {
+        urls.push(item.url)
+      }
+      
+      // 创建服务器下载任务
+      this.serverTaskId = await serverAPI.createDownloadTask(
+        urls,
+        headers,
+        'pixiv_{id}_{title}',
+        settings.skipDownloaded
+      )
+      
+      if (!this.serverTaskId) {
+        // 如果没有获取到任务ID，可能是所有作品都已下载
+        this.log.success(lang.transl('_所有作品已下载，无需重复下载'))
+        return
+      }
+      
+      // 开始轮询任务状态
+      this.startServerTaskStatusCheck()
+      
+    } catch (error) {
+      console.error('服务器下载失败:', error)
+      this.log.error(`${lang.transl('_服务器下载失败')}: ${error.message}`)
+    }
+  }
+
+  // 轮询服务器任务状态
+  private startServerTaskStatusCheck() {
+    if (this.serverTaskCheckInterval) {
+      clearInterval(this.serverTaskCheckInterval)
+    }
+    
+    this.serverTaskCheckInterval = window.setInterval(async () => {
+      if (!this.serverTaskId) {
+        this.stopServerTaskStatusCheck()
+        return
+      }
+      
+      try {
+        const status = await serverAPI.getTaskStatus(this.serverTaskId)
+        
+        // 更新下载进度
+        this.log.log(`${lang.transl('_下载进度')}: ${status.progress}% (${status.completed}/${status.total})`)
+        
+        // 如果任务完成或取消，停止轮询
+        if (status.status === 'completed' || status.status === 'cancelled') {
+          this.log.success(`${lang.transl('_下载完成')}: ${status.completed}/${status.total}`)
+          this.stopServerTaskStatusCheck()
+        }
+      } catch (error) {
+        console.error('获取任务状态失败:', error)
+        this.log.error(`${lang.transl('_获取任务状态失败')}: ${error.message}`)
+        this.stopServerTaskStatusCheck()
+      }
+    }, 2000) // 每2秒检查一次
+  }
+
+  // 停止轮询
+  private stopServerTaskStatusCheck() {
+    if (this.serverTaskCheckInterval) {
+      clearInterval(this.serverTaskCheckInterval)
+      this.serverTaskCheckInterval = null
+    }
+    this.serverTaskId = null
+  }
+
+  // 取消下载
+  public cancelDownload() {
+    // ... existing code ...
+    
+    // 如果有服务器任务，也取消它
+    if (this.serverTaskId) {
+      serverAPI.cancelTask(this.serverTaskId)
+        .then(() => {
+          this.log.log(lang.transl('_已取消服务器下载任务'))
+        })
+        .catch(error => {
+          console.error('取消服务器任务失败:', error)
+          this.log.error(`${lang.transl('_取消服务器任务失败')}: ${error.message}`)
+        })
+        .finally(() => {
+          this.stopServerTaskStatusCheck()
+        })
+    }
+    
+    // ... existing code ...
   }
 }
 
